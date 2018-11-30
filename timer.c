@@ -41,7 +41,7 @@ static mach_timebase_info_data_t mill_mtid = {0};
 #define MILL_CLOCK_PRECISION 1000000
 
 /* Returns current time by querying the operating system. */
-static int64_t mill_now(void) {
+static int64_t mill_os_time(void) {
 #if defined __APPLE__
     if (mill_slow(!mill_mtid.denom))
         mach_timebase_info(&mill_mtid);
@@ -60,7 +60,7 @@ static int64_t mill_now(void) {
 #endif
 }
 
-int64_t now(void) {
+int64_t mill_now_(void) {
 #if (defined __GNUC__ || defined __clang__) && \
       (defined __i386__ || defined __x86_64__)
     /* Get the timestamp counter. This is time since startup, expressed in CPU
@@ -77,7 +77,7 @@ int64_t now(void) {
     static int64_t last_now = -1;
     if(mill_slow(last_tsc < 0)) {
         last_tsc = tsc;
-        last_now = mill_now();
+        last_now = mill_os_time();
     }   
     /* If TSC haven't jumped back or progressed more than 1/2 ms, we can use
        the cached time value. */
@@ -87,10 +87,10 @@ int64_t now(void) {
     /* It's more than 1/2 ms since we've last measured the time.
        We'll do a new measurement now. */
     last_tsc = tsc;
-    last_now = mill_now();
+    last_now = mill_os_time();
     return last_now;
 #else
-    return mill_now();
+    return mill_os_time();
 #endif
 }
 
@@ -118,7 +118,9 @@ void mill_timer_add(struct mill_timer *timer, int64_t deadline,
 }
 
 void mill_timer_rm(struct mill_timer *timer) {
+    mill_assert(timer->expiry >= 0);
     mill_list_erase(&mill_timers, &timer->item);
+    timer->expiry = -1;
 }
 
 int mill_timer_next(void) {
@@ -142,10 +144,15 @@ int mill_timer_fire(void) {
         if(tm->expiry > nw)
             break;
         mill_list_erase(&mill_timers, mill_list_begin(&mill_timers));
+        tm->expiry = -1;
         if(tm->callback)
             tm->callback(tm);
         fired = 1;
     }
     return fired;
+}
+
+void mill_timer_postfork(void) {
+    mill_list_init(&mill_timers);
 }
 

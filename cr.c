@@ -26,6 +26,10 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#if defined MILL_VALGRIND
+#include <valgrind/valgrind.h>
+#endif
+
 #include "cr.h"
 #include "debug.h"
 #include "libmill.h"
@@ -41,15 +45,23 @@ size_t mill_valbuf_size = 128;
 /* Valbuf for tha main coroutine. */
 char mill_main_valbuf[128];
 
-volatile int mill_unoptimisable1 = 1;
-volatile void *mill_unoptimisable2 = NULL;
+volatile int mill_unoptimisable1_ = 1;
+volatile void *mill_unoptimisable2_ = NULL;
 
 struct mill_cr mill_main = {0};
 
 struct mill_cr *mill_running = &mill_main;
 
 /* Queue of coroutines scheduled for execution. */
-static struct mill_slist mill_ready = {0};
+struct mill_slist mill_ready = {0};
+
+inline mill_ctx mill_getctx_(void) {
+#if defined __x86_64__
+    return mill_running->ctx;
+#else
+    return &mill_running->ctx;
+#endif
+}
 
 static void *mill_getvalbuf(struct mill_cr *cr, size_t size) {
     /* Small valbufs don't require dynamic allocation. Also note that main
@@ -74,7 +86,7 @@ static void *mill_getvalbuf(struct mill_cr *cr, size_t size) {
     return cr->valbuf;
 }
 
-void goprepare(int count, size_t stack_size, size_t val_size) {
+void mill_goprepare_(int count, size_t stack_size, size_t val_size) {
     if(mill_slow(mill_hascrs())) {errno = EAGAIN; return;}
     /* Allocate any resources needed by the polling mechanism. */
     mill_poller_init();
@@ -99,15 +111,20 @@ int mill_suspend(void) {
         counter = 0;
     }
     /* Store the context of the current coroutine, if any. */
-    if(mill_running && mill_setjmp(&mill_running->ctx))
-        return mill_running->result;
+    if(mill_running) {
+        mill_ctx ctx = mill_getctx_();
+        if (mill_setjmp_(ctx))
+            return mill_running->result;
+    }
     while(1) {
         /* If there's a coroutine ready to be executed go for it. */
         if(!mill_slist_empty(&mill_ready)) {
             ++counter;
             struct mill_slist_item *it = mill_slist_pop(&mill_ready);
             mill_running = mill_cont(it, struct mill_cr, ready);
-            mill_jmp(&mill_running->ctx);
+            mill_assert(mill_running->is_ready == 1);
+            mill_running->is_ready = 0;
+            mill_longjmp_(mill_getctx_());
         }
         /* Otherwise, we are going to wait for sleeping coroutines
            and for external events. */
@@ -117,13 +134,15 @@ int mill_suspend(void) {
     }
 }
 
-void mill_resume(struct mill_cr *cr, int result) {
+inline void mill_resume(struct mill_cr *cr, int result) {
+    mill_assert(!cr->is_ready);
     cr->result = result;
     cr->state = MILL_READY;
+    cr->is_ready = 1;
     mill_slist_push_back(&mill_ready, &cr->ready);
 }
 
-/* dill_prologue() and dill_epilogue() live in the same scope with
+/* mill_prologue_() and mill_epilogue_() live in the same scope with
    libdill's stack-switching black magic. As such, they are extremely
    fragile. Therefore, the optimiser is prohibited to touch them. */
 #if defined __clang__
@@ -137,22 +156,30 @@ void mill_resume(struct mill_cr *cr, int result) {
 /* The intial part of go(). Starts the new coroutine.
    Returns the pointer to the top of its stack. */
 __attribute__((noinline)) dill_noopt
-void *mill_go_prologue(const char *created) {
+void *mill_prologue_(const char *created) {
     /* Ensure that debug functions are available whenever a single go()
        statement is present in the user's code. */
     mill_preserve_debug();
     /* Allocate and initialise new stack. */
-    struct mill_cr *cr = ((struct mill_cr*)mill_allocstack()) - 1;
+#if defined MILL_VALGRIND
+    size_t stack_size;
+    struct mill_cr *cr = ((struct mill_cr*)mill_allocstack(&stack_size));
+    int sid = VALGRIND_STACK_REGISTER(((char*)cr) - stack_size, cr);
+    --cr;
+    cr->sid = sid;
+#else
+    struct mill_cr *cr = ((struct mill_cr*)mill_allocstack(NULL)) - 1;
+#endif
     mill_register_cr(&cr->debug, created);
+    cr->is_ready = 0;
     cr->valbuf = NULL;
     cr->valbuf_sz = 0;
-    cr->cls = NULL;
+    cr->clsval = NULL;
+    cr->timer.expiry = -1;
     cr->fd = -1;
     cr->events = 0;
     mill_trace(created, "{%d}=go()", (int)cr->debug.id);
     /* Suspend the parent coroutine and make the new one running. */
-    if(mill_setjmp(&mill_running->ctx))
-        return NULL;
     mill_resume(mill_running, 0);    
     mill_running = cr;
     /* Return pointer to the top of the stack. There's valbuf interposed
@@ -162,11 +189,14 @@ void *mill_go_prologue(const char *created) {
 
 /* The final part of go(). Cleans up after the coroutine is finished. */
 __attribute__((noinline)) dill_noopt
-void mill_go_epilogue(void) {
+void mill_epilogue_(void) {
     mill_trace(NULL, "go() done");
     mill_unregister_cr(&mill_running->debug);
     if(mill_running->valbuf)
         free(mill_running->valbuf);
+#if defined MILL_VALGRIND
+    VALGRIND_STACK_DEREGISTER(mill_running->sid);
+#endif
     mill_freestack(mill_running + 1);
     mill_running = NULL;
     /* Given that there's no running coroutine at this point
@@ -174,7 +204,7 @@ void mill_go_epilogue(void) {
     mill_suspend();
 }
 
-void mill_yield(const char *current) {
+void mill_yield_(const char *current) {
     mill_trace(current, "yield()");
     mill_set_current(&mill_running->debug, current);
     /* This looks fishy, but yes, we can resume the coroutine even before
@@ -190,11 +220,16 @@ void *mill_valbuf(struct mill_cr *cr, size_t size) {
     return ptr;
 }
 
-void *cls(void) {
-    return mill_running->cls;
+void *mill_cls_(void) {
+    return mill_running->clsval;
 }
 
-void setcls(void *val) {
-    mill_running->cls = val;
+void mill_setcls_(void *val) {
+    mill_running->clsval = val;
+}
+
+void mill_cr_postfork(void) {
+    /* Drop all coroutines in the "ready to execute" list. */
+    mill_slist_init(&mill_ready);
 }
 

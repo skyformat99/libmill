@@ -73,7 +73,7 @@ static size_t mill_get_stack_size(void) {
 static int mill_max_cached_stacks = 64;
 
 /* A stack of unused coroutine stacks. This allows for extra-fast allocation
-   of a new stack. The FIFO nature of this structure minimises cache misses.
+   of a new stack. The LIFO nature of this structure minimises cache misses.
    When the stack is cached its mill_slist_item is placed on its top rather
    then on the bottom. That way we minimise page misses. */
 static int mill_num_cached_stacks = 0;
@@ -150,7 +150,7 @@ error:
     errno = ENOMEM;
 }
 
-void *mill_allocstack(void) {
+void *mill_allocstack(size_t *stack_size) {
     if(!mill_slist_empty(&mill_cached_stacks)) {
         --mill_num_cached_stacks;
         return (void*)(mill_slist_pop(&mill_cached_stacks) + 1);
@@ -158,6 +158,8 @@ void *mill_allocstack(void) {
     void *ptr = mill_allocstackmem();
     if(!ptr)
         mill_panic("not enough memory to allocate coroutine stack");
+    if(stack_size)
+        *stack_size = mill_get_stack_size();
     return ptr;
 }
 

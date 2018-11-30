@@ -42,6 +42,7 @@ libmill_la_SOURCES = \
     ip.c \
     list.h \
     list.c \
+    mfork.c \
     poller.h \
     poller.c \
     slist.h \
@@ -59,7 +60,8 @@ libmill_la_SOURCES = \
     kqueue.inc \
     dns/dns.h \
     dns/dns.c \
-    file.c
+    file.c \
+    ssl.c
 
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = libmill.pc
@@ -93,7 +95,15 @@ check_PROGRAMS = \
     tests/signals\
     tests/overload\
     tests/ip\
-    tests/file
+    tests/file\
+    tests/mfork1\
+    tests/mfork2\
+    tests/mfork3\
+    tests/ssl
+
+EXTRA_DIST = \
+    tests/cert.pem \
+    tests/key.pem
 
 LDADD = libmill.la
 
@@ -123,7 +133,8 @@ noinst_PROGRAMS += \
     tutorial/step4 \
     tutorial/step5 \
     tutorial/step6 \
-    tutorial/step7
+    tutorial/step7 \
+    tutorial/step8
 
 ################################################################################
 #  additional packaging-related stuff                                          #
@@ -148,7 +159,7 @@ dist-hook:
 	fi; \
 	$(srcdir)/package_version.sh > $(distdir)/.version
 
-EXTRA_DIST = \
+EXTRA_DIST += \
     ./abi_version.sh \
     ./package_version.sh \
     ./CMakeLists.txt

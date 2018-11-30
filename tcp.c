@@ -52,18 +52,18 @@ enum mill_tcptype {
    MILL_TCPCONN
 };
 
-struct mill_tcpsock {
+struct mill_tcpsock_ {
     enum mill_tcptype type;
 };
 
 struct mill_tcplistener {
-    struct mill_tcpsock sock;
+    struct mill_tcpsock_ sock;
     int fd;
     int port;
 };
 
 struct mill_tcpconn {
-    struct mill_tcpsock sock;
+    struct mill_tcpsock_ sock;
     int fd;
     size_t ifirst;
     size_t ilen;
@@ -101,7 +101,7 @@ static void tcpconn_init(struct mill_tcpconn *conn, int fd) {
     conn->olen = 0;
 }
 
-tcpsock tcplisten(ipaddr addr, int backlog) {
+struct mill_tcpsock_ *mill_tcplisten_(ipaddr addr, int backlog) {
     /* Open the listening socket. */
     int s = socket(mill_ipfamily(addr), SOCK_STREAM, 0);
     if(s == -1)
@@ -119,7 +119,7 @@ tcpsock tcplisten(ipaddr addr, int backlog) {
     /* If the user requested an ephemeral port,
        retrieve the port number assigned by the OS now. */
     int port = mill_ipport(addr);
-    if(!port == 0) {
+    if(!port) {
         ipaddr baddr;
         socklen_t len = sizeof(ipaddr);
         rc = getsockname(s, (struct sockaddr*)&baddr, &len);
@@ -148,7 +148,7 @@ tcpsock tcplisten(ipaddr addr, int backlog) {
     return &l->sock;
 }
 
-int tcpport(tcpsock s) {
+int mill_tcpport_(struct mill_tcpsock_ *s) {
     if(s->type == MILL_TCPCONN) {
         struct mill_tcpconn *c = (struct mill_tcpconn*)s;
         return mill_ipport(c->addr);
@@ -160,7 +160,7 @@ int tcpport(tcpsock s) {
     mill_assert(0);
 }
 
-tcpsock tcpaccept(tcpsock s, int64_t deadline) {
+struct mill_tcpsock_ *mill_tcpaccept_(struct mill_tcpsock_ *s, int64_t deadline) {
     if(s->type != MILL_TCPLISTENER)
         mill_panic("trying to accept on a socket that isn't listening");
     struct mill_tcplistener *l = (struct mill_tcplistener*)s;
@@ -193,11 +193,13 @@ tcpsock tcpaccept(tcpsock s, int64_t deadline) {
             errno = ETIMEDOUT;
             return NULL;
         }
+        if(rc & FDW_ERR)
+            return NULL;
         mill_assert(rc == FDW_IN);
     }
 }
 
-tcpsock tcpconnect(ipaddr addr, int64_t deadline) {
+struct mill_tcpsock_ *mill_tcpconnect_(ipaddr addr, int64_t deadline) {
     /* Open a socket. */
     int s = socket(mill_ipfamily(addr), SOCK_STREAM, 0);
     if(s == -1)
@@ -246,7 +248,8 @@ tcpsock tcpconnect(ipaddr addr, int64_t deadline) {
     return (tcpsock)conn;
 }
 
-size_t tcpsend(tcpsock s, const void *buf, size_t len, int64_t deadline) {
+size_t mill_tcpsend_(struct mill_tcpsock_ *s, const void *buf, size_t len,
+      int64_t deadline) {
     if(s->type != MILL_TCPCONN)
         mill_panic("trying to send to an unconnected socket");
     struct mill_tcpconn *conn = (struct mill_tcpconn*)s;
@@ -279,6 +282,12 @@ size_t tcpsend(tcpsock s, const void *buf, size_t len, int64_t deadline) {
     while(remaining) {
         ssize_t sz = send(conn->fd, pos, remaining, 0);
         if(sz == -1) {
+            /* Operating systems are inconsistent w.r.t. returning EPIPE and
+               ECONNRESET. Let's paper over it like this. */
+            if(errno == EPIPE) {
+                errno = ECONNRESET;
+                return 0;
+            }
             if(errno != EAGAIN && errno != EWOULDBLOCK)
                 return 0;
             int rc = fdwait(conn->fd, FDW_OUT, deadline);
@@ -286,16 +295,16 @@ size_t tcpsend(tcpsock s, const void *buf, size_t len, int64_t deadline) {
                 errno = ETIMEDOUT;
                 return len - remaining;
             }
-            mill_assert(rc == FDW_OUT);
             continue;
         }
         pos += sz;
         remaining -= sz;
     }
+    errno = 0;
     return len;
 }
 
-void tcpflush(tcpsock s, int64_t deadline) {
+void mill_tcpflush_(struct mill_tcpsock_ *s, int64_t deadline) {
     if(s->type != MILL_TCPCONN)
         mill_panic("trying to send to an unconnected socket");
     struct mill_tcpconn *conn = (struct mill_tcpconn*)s;
@@ -308,6 +317,12 @@ void tcpflush(tcpsock s, int64_t deadline) {
     while(remaining) {
         ssize_t sz = send(conn->fd, pos, remaining, 0);
         if(sz == -1) {
+            /* Operating systems are inconsistent w.r.t. returning EPIPE and
+               ECONNRESET. Let's paper over it like this. */
+            if(errno == EPIPE) {
+                errno = ECONNRESET;
+                return;
+            }
             if(errno != EAGAIN && errno != EWOULDBLOCK)
                 return;
             int rc = fdwait(conn->fd, FDW_OUT, deadline);
@@ -315,7 +330,6 @@ void tcpflush(tcpsock s, int64_t deadline) {
                 errno = ETIMEDOUT;
                 return;
             }
-            mill_assert(rc == FDW_OUT);
             continue;
         }
         pos += sz;
@@ -325,7 +339,8 @@ void tcpflush(tcpsock s, int64_t deadline) {
     errno = 0;
 }
 
-size_t tcprecv(tcpsock s, void *buf, size_t len, int64_t deadline) {
+size_t mill_tcprecv_(struct mill_tcpsock_ *s, void *buf, size_t len,
+      int64_t deadline) {
     if(s->type != MILL_TCPCONN)
         mill_panic("trying to receive from an unconnected socket");
     struct mill_tcpconn *conn = (struct mill_tcpconn*)s;
@@ -407,7 +422,7 @@ size_t tcprecv(tcpsock s, void *buf, size_t len, int64_t deadline) {
     }
 }
 
-size_t tcprecvuntil(tcpsock s, void *buf, size_t len,
+size_t mill_tcprecvuntil_(struct mill_tcpsock_ *s, void *buf, size_t len,
       const char *delims, size_t delimcount, int64_t deadline) {
     if(s->type != MILL_TCPCONN)
         mill_panic("trying to receive from an unconnected socket");
@@ -428,7 +443,14 @@ size_t tcprecvuntil(tcpsock s, void *buf, size_t len,
     return len;
 }
 
-void tcpclose(tcpsock s) {
+void mill_tcpshutdown_(struct mill_tcpsock_ *s, int how) {
+    mill_assert(s->type == MILL_TCPCONN);
+    struct mill_tcpconn *c = (struct mill_tcpconn*)s;
+    int rc = shutdown(c->fd, how);
+    mill_assert(rc == 0 || errno == ENOTCONN);
+}
+
+void mill_tcpclose_(struct mill_tcpsock_ *s) {
     if(s->type == MILL_TCPLISTENER) {
         struct mill_tcplistener *l = (struct mill_tcplistener*)s;
         fdclean(l->fd);
@@ -448,10 +470,17 @@ void tcpclose(tcpsock s) {
     mill_assert(0);
 }
 
-ipaddr tcpaddr(tcpsock s) {
+ipaddr mill_tcpaddr_(struct mill_tcpsock_ *s) {
     if(s->type != MILL_TCPCONN)
         mill_panic("trying to get address from a socket that isn't connected");
     struct mill_tcpconn *l = (struct mill_tcpconn *)s;
     return l->addr;
+}
+
+/* This function is to be used only internally by libmill. Take into account
+   that once there are data in tcpsock's tx/rx buffers, the state of fd may
+   not match the state of tcpsock object. Works only on connected sockets. */
+int mill_tcpfd(struct mill_tcpsock_ *s) {
+    return ((struct mill_tcpconn*)s)->fd;
 }
 

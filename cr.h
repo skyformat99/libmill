@@ -25,6 +25,7 @@
 #ifndef MILL_CR_INCLUDED
 #define MILL_CR_INCLUDED
 
+#include <setjmp.h>
 #include <stdint.h>
 
 #include "chan.h"
@@ -60,16 +61,20 @@ struct mill_cr {
     enum mill_state state;
 
     /* The coroutine is stored in this list if it is not blocked and it is
-       waiting to be executed. */
+       waiting to be executed. In such case 'is_ready' is set to 1, otherwise
+       it's set to 0. */
+    int is_ready;
     struct mill_slist_item ready;
 
     /* If the coroutine is waiting for a deadline, it uses this timer. */
     struct mill_timer timer;
 
-    /* When the coroutine is blocked in fdwait(), these members contains the
-       file descriptor and events that the function waits for. They are used
-       only for debugging purposes. */
+    /* The file descriptor for which the coroutine waits for an event
+       when blocked in fdwait(). -1 when it isn't waiting for any event. */
     int fd;
+
+    /* When the coroutine is blocked in fdwait(), the events that the function
+       waits for. This is used only for debugging purposes. */
     int events;
 
     /* This structure is used when the coroutine is executing a choose
@@ -77,7 +82,11 @@ struct mill_cr {
     struct mill_choosedata choosedata;
 
     /* Stored coroutine context while it is not executing. */
-    struct mill_ctx ctx;
+#if defined(__x86_64__)
+    uint64_t ctx[10];
+#else
+    sigjmp_buf ctx;
+#endif
 
     /* Argument to resume() call being passed to the blocked suspend() call. */
     int result;
@@ -89,7 +98,12 @@ struct mill_cr {
     size_t valbuf_sz;
 
     /* Coroutine-local storage. */
-    void *cls;
+    void *clsval;
+
+#if defined MILL_VALGRIND
+    /* Valgrind stack identifier. */
+    int sid;
+#endif
 
     /* Debugging info. */
     struct mill_debug_cr debug;
@@ -114,5 +128,9 @@ void mill_resume(struct mill_cr *cr, int result);
 /* Returns pointer to the value buffer. The returned buffer is guaranteed
    to be at least 'size' bytes long. */
 void *mill_valbuf(struct mill_cr *cr, size_t size);
+
+/* Called in the child process after fork to stop all the coroutines 
+   inherited from the parent. */
+void mill_cr_postfork(void);
 
 #endif

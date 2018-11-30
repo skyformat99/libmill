@@ -56,7 +56,7 @@ static void mill_filetune(int fd) {
 }
 
 
-mfile mfopen(const char *pathname, int flags, mode_t mode) {
+struct mill_file *mill_mfopen_(const char *pathname, int flags, mode_t mode) {
     /* Open the file. */
     int fd = open(pathname, flags, mode);
     if (fd == -1)
@@ -79,7 +79,8 @@ mfile mfopen(const char *pathname, int flags, mode_t mode) {
     return f;
 }
 
-size_t mfwrite(mfile f, const void *buf, size_t len, int64_t deadline) {
+size_t mill_mfwrite_(struct mill_file *f, const void *buf, size_t len,
+      int64_t deadline) {
     /* If it fits into the output buffer copy it there and be done. */
     if(f->olen + len <= MILL_FILE_BUFLEN) {
         memcpy(&f->obuf[f->olen], buf, len);
@@ -124,7 +125,7 @@ size_t mfwrite(mfile f, const void *buf, size_t len, int64_t deadline) {
     return len;
 }
 
-void mfflush(mfile f, int64_t deadline) {
+void mill_mfflush_(struct mill_file *f, int64_t deadline) {
     if(!f->olen) {
         errno = 0;
         return;
@@ -151,7 +152,8 @@ void mfflush(mfile f, int64_t deadline) {
     errno = 0;
 }
 
-size_t mfread(mfile f, void *buf, size_t len, int64_t deadline) {
+size_t mill_mfread_(struct mill_file *f, void *buf, size_t len,
+      int64_t deadline) {
     /* If there's enough data in the buffer it's easy. */
     if(f->ilen >= len) {
         memcpy(buf, &f->ibuf[f->ifirst], len);
@@ -234,7 +236,7 @@ size_t mfread(mfile f, void *buf, size_t len, int64_t deadline) {
     }
 }
 
-void mfclose(mfile f) {
+void mill_mfclose_(struct mill_file *f) {
     fdclean(f->fd);
     int rc = close(f->fd);
     mill_assert(rc == 0);
@@ -242,18 +244,18 @@ void mfclose(mfile f) {
     return;
 }
 
-off_t mftell(mfile f) {
+off_t mill_mftell_(struct mill_file *f) {
     return lseek(f->fd, 0, SEEK_CUR) - f->ilen;
 }
 
-off_t mfseek(mfile f, off_t offset) {
+off_t mill_mfseek_(struct mill_file *f, off_t offset) {
     f->ifirst = 0;
     f->ilen = 0;
     f->olen = 0;
     return lseek(f->fd, offset, SEEK_SET);
 }
 
-int mfeof(mfile f) {
+int mill_mfeof_(struct mill_file *f) {
     off_t current = lseek(f->fd, 0, SEEK_CUR);
     if (current == -1)
         return -1;
@@ -266,7 +268,7 @@ int mfeof(mfile f) {
     return (current == eof);
 }
 
-mfile mill_mfin(void) {
+struct mill_file *mill_mfin_(void) {
     static struct mill_file f = {-1, 0, 0, 0};
     if(mill_slow(f.fd < 0)) {
         mill_filetune(STDIN_FILENO);
@@ -275,7 +277,7 @@ mfile mill_mfin(void) {
     return &f;
 }
 
-mfile mill_mfout(void) {
+struct mill_file *mill_mfout_(void) {
     static struct mill_file f = {-1, 0, 0, 0};
     if(mill_slow(f.fd < 0)) {
         mill_filetune(STDOUT_FILENO);
@@ -284,7 +286,7 @@ mfile mill_mfout(void) {
     return &f;
 }
 
-mfile mill_mferr(void) {
+struct mill_file *mill_mferr_(void) {
     static struct mill_file f = {-1, 0, 0, 0};
     if(mill_slow(f.fd < 0)) {
         mill_filetune(STDERR_FILENO);

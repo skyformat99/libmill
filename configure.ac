@@ -60,6 +60,21 @@ AC_PROG_CC_C99
 AM_PROG_CC_C_O
 
 ################################################################################
+#  --enable-ssl                                                                #
+################################################################################
+
+AC_ARG_ENABLE([ssl], [AS_HELP_STRING([--enable-ssl],
+    [Enable SSL sockets [default=no]])])
+
+if test "x$enable_ssl" = "xyes"; then
+    AC_DEFINE(HAVE_SSL)
+    AC_CHECK_LIB([ssl], [SSL_ctrl], [],
+        AC_MSG_ERROR([libssl not found; install OpenSSL]))
+    AC_CHECK_LIB([crypto], [BIO_read], [],
+        AC_MSG_ERROR([libcrypto not found; install OpenSSL]))
+fi
+
+################################################################################
 #  --enable-debug                                                              #
 ################################################################################
 
@@ -69,6 +84,17 @@ AC_ARG_ENABLE([debug], [AS_HELP_STRING([--enable-debug],
 if test "x$enable_debug" = "xyes"; then
     # Override original optimisation level - last option specified wins.
     CFLAGS="$CFLAGS -g -O0"
+fi
+
+################################################################################
+#  --enable-valgrind                                                           #
+################################################################################
+
+AC_ARG_ENABLE([valgrind], [AS_HELP_STRING([--enable-valgrind],
+    [Provide information about coroutine stacks to valgrind [default=no]])])
+
+if test "x$enable_valgrind" = "xyes"; then
+    AC_DEFINE(MILL_VALGRIND)
 fi
 
 ################################################################################
